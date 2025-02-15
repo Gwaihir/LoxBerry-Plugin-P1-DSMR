@@ -9,9 +9,8 @@ import os
 import configparser
 import json
 import base64
+import crcmod
 import paho.mqtt.client as mqtt
-from Cryptodome.Cipher import AES
-
 
 class P1decrypter:
     def __init__(self):
@@ -46,6 +45,9 @@ class P1decrypter:
         self._frame_counter = b""
         self._payload = b""
         self._gcm_tag = b""
+        self._crc_counter = 0
+        self._crc = b""
+        self._crc16_func = crcmod.mkCrcFun(0x18005, initCrc=0x0000, xorOut=0x0000)
 
         self.LBSCONFIG = ""
         self.miniserver_id = ""
@@ -265,7 +267,7 @@ class P1decrypter:
 
         if self._state == self.STATE_IGNORING:
             logging.debug("STATE_IGNORING: Wait for start byte, got: ({0})".format(hex_input))
-            if hex_input == b'db':
+            if hex_input == b'2f': # '/'
                 logging.debug("STATE_IGNORING: Start byte has been detected: ({0})".format(hex_input))
                 self._state = self.STATE_STARTED
                 self._buffer = b""
@@ -277,68 +279,26 @@ class P1decrypter:
                 self._frame_counter = b""
                 self._payload = b""
                 self._gcm_tag = b""
+                self._crc_counter = 0
+                self._crc = b""
+                self._payload += hex_input
             else:
                 return
         elif self._state == self.STATE_STARTED:
-            self._state = self.STATE_HAS_SYSTEM_TITLE_LENGTH
-            self._system_title_length = int(hex_input, 16)
-            self._buffer_length = self._buffer_length + 1
-            self._next_state = 2 + self._system_title_length  # start bytes + system title length
-            logging.debug("STATE_STARTED: Length of system title: ({0})".format(self._system_title_length))
-        elif self._state == self.STATE_HAS_SYSTEM_TITLE_LENGTH:
-            if self._buffer_length > self._next_state:
-                self._system_title += hex_input
-                self._state = self.STATE_HAS_SYSTEM_TITLE
-                self._next_state = self._next_state + 2  # read two more bytes
-                logging.debug("STATE_HAS_SYSTEM_TITLE_LENGTH: System title: ({0})".format(self._system_title))
-            else:
-                self._system_title += hex_input
-        elif self._state == self.STATE_HAS_SYSTEM_TITLE:
-            if hex_input == b'82':
-                self._next_state = self._next_state + 1
-                self._state = self.STATE_HAS_SYSTEM_TITLE_SUFFIX  # Ignore separator byte
-                logging.debug("STATE_HAS_SYSTEM_TITLE: Additional byte after system title: ({0})".format(hex_input))
-            else:
-                logging.warning("Expected 0x82 separator byte not found, dropping frame")
+            self._payload += hex_input
+            if hex_input == b'21': # '!'
+                self._state = self.STATE_HAS_PAYLOAD
+            elif hex_input == b'2f': # '/'
+                logging.warning("Unexpected start byte 0x2f found, dropping frame")
                 logging.debug("Buffer ({0})".format(self._buffer))
                 self._state = self.STATE_IGNORING
-        elif self._state == self.STATE_HAS_SYSTEM_TITLE_SUFFIX:
-            if self._buffer_length > self._next_state:
-                self._data_length_bytes += hex_input
-                self._data_length = int(self._data_length_bytes, 16)
-                self._state = self.STATE_HAS_DATA_LENGTH
-                logging.debug("STATE_HAS_SYSTEM_TITLE_SUFFIX: Length of remaining data: ({0})"
-                              .format(self._data_length_bytes))
-            else:
-                self._data_length_bytes += hex_input
-        elif self._state == self.STATE_HAS_DATA_LENGTH:
-            logging.debug("STATE_HAS_DATA_LENGTH: Additional byte after data: ({0})".format(hex_input))
-            self._state = self.STATE_HAS_SEPARATOR  # Ignore separator byte
-            self._next_state = self._next_state + 1 + 4  # separator byte + 4 bytes for framecounter
-        elif self._state == self.STATE_HAS_SEPARATOR:
-            if self._buffer_length > self._next_state:
-                self._frame_counter += hex_input
-                self._state = self.STATE_HAS_FRAME_COUNTER
-                self._next_state = self._next_state + self._data_length - 17
-                logging.debug("STATE_HAS_DATA_LENGTH: Frame counter: ({0})".format(self._frame_counter))
-            else:
-                self._frame_counter += hex_input
-        elif self._state == self.STATE_HAS_FRAME_COUNTER:
-            if self._buffer_length > self._next_state:
-                self._payload += hex_input
-                self._state = self.STATE_HAS_PAYLOAD
-                self._next_state = self._next_state + 12
-                logging.debug("STATE_HAS_FRAME_COUNTER: Payload: ({0})".format(self._payload))
-            else:
-                self._payload += hex_input
         elif self._state == self.STATE_HAS_PAYLOAD:
-            if self._buffer_length > self._next_state:
-                self._gcm_tag += hex_input
+            self._crc += hex_input
+            self._crc_counter = self._crc_counter +1
+            if self._crc_counter > 3:
                 self._state = self.STATE_DONE
-                logging.debug("STATE_HAS_PAYLOAD: GCM Tag: {0}".format(self._gcm_tag))
+                logging.debug("STATE_HAS_PAYLOAD: CRC: {0}".format(self._crc))
                 logging.debug("STATE_HAS_PAYLOAD: Switch back to STATE_IGNORING and wait for a new telegram")
-            else:
-                self._gcm_tag += hex_input
 
         self._buffer += hex_input
         self._buffer_length = self._buffer_length + 1
@@ -348,23 +308,21 @@ class P1decrypter:
             self._state = self.STATE_IGNORING
 
     def decrypt(self):
-        logging.debug("Full telegram received, start decryption of: {0}".format(self._buffer))
-
-        cipher = AES.new(
-            binascii.unhexlify(self._args.key),
-            AES.MODE_GCM,
-            binascii.unhexlify(self._system_title + self._frame_counter),
-            mac_len=12
-        )
-        cipher.update(binascii.unhexlify(self._args.aad))
-        self.mapping(cipher.decrypt(binascii.unhexlify(self._payload)))
+        logging.debug("Full telegram received, start decryption of: {0}".format(self._payload))
+        data = binascii.unhexlify(self._payload)
+        crc16 = self._crc16_func(data)
+        logging.debug("Berekende CRC: {0}".format(f"{crc16:04X}"))
+        logging.debug("Gelezen CRC: {0}".format(binascii.unhexlify(self._crc).decode("ASCII")))
+        if binascii.unhexlify(self._crc).decode("ASCII") != f"{crc16:04X}":
+            logging.warning("CRC invalid, dropping frame")
+            self._state = self.STATE_IGNORING
+        self.mapping(data)
 
     def mapping(self, decryption):
         logging.debug("Decryption done. Extract data by mapping configuration: {0}".format(decryption))
 
         decryption_decoded = decryption.decode()
         mapped_values_string = ""
-
         if self._args.raw:
             logging.debug("Raw output is enabled. Mapping extraction stopped. Send complete telegram")
             mapped_values_string = decryption_decoded
