@@ -296,23 +296,23 @@ class P1decrypter:
             self._crc += hex_input
             self._crc_counter = self._crc_counter +1
             if self._crc_counter > 3:
+                logging.debug("STATE_HAS_PAYLOAD: CRC: {0}".format(binascii.unhexlify(self._crc).decode("ASCII")))
                 self._state = self.STATE_DONE
-                logging.debug("STATE_HAS_PAYLOAD: CRC: {0}".format(self._crc))
-                logging.debug("STATE_HAS_PAYLOAD: Switch back to STATE_IGNORING and wait for a new telegram")
 
         self._buffer += hex_input
         self._buffer_length = self._buffer_length + 1
 
         if self._state == self.STATE_DONE:
             self.decrypt()
+            logging.debug("STATE_DONE: Switch back to STATE_IGNORING and wait for a new telegram")
             self._state = self.STATE_IGNORING
 
     def decrypt(self):
         logging.debug("Full telegram received, start decryption of: {0}".format(self._payload))
         data = binascii.unhexlify(self._payload)
         crc16 = self._crc16_func(data)
-        logging.debug("Berekende CRC: {0}".format(f"{crc16:04X}"))
-        logging.debug("Gelezen CRC: {0}".format(binascii.unhexlify(self._crc).decode("ASCII")))
+        logging.debug("Calulated CRC: {0}".format(f"{crc16:04X}"))
+        logging.debug("Read CRC: {0}".format(binascii.unhexlify(self._crc).decode("ASCII")))
         if binascii.unhexlify(self._crc).decode("ASCII") != f"{crc16:04X}":
             logging.warning("CRC invalid, dropping frame")
             self._state = self.STATE_IGNORING
