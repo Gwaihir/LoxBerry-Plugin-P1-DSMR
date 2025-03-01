@@ -1,4 +1,17 @@
-# Loxberry Plugin: P1 Decrypter
+# Loxberry Plugin: P1 DSMR
+
+This is a crude adaption of the LoxBerry-Plugin-P1-Decrypter to make it read from a Dutch DSMR 5.0 meter instead of an encrypted Austrian one. **It works on my machine**.
+
+I created it as I found no other such plugin available. (Generally speaking the Smartmeter Plugin looks most promising, but right now, Feb '25, it is in some not-configurable state between major versions.) I got this to work and am using it (at time of writing). But I've also already concluded that this is probably not an ultimately practical approach for me (as I want to route some P1 data to Loxone and some elsewhere). As such, it is likely to stay *as is*.
+
+It's here in case it is of use to anyone else and in tribute to those who's materials this fork so generously benefits from.
+
+- The decryption has been ripped from the Python code and replaced with code to read DSMR 5.0 P1 telegrams
+- including validation of the CRC of each telegram (invalid telegrams are ignored).
+- The (default) value mapping now contains those DSMR 5.0 (OBIS) references who's data I wanted in my Loxone
+- The dependencies have been updated, but the install / uninstall is untested and will not distinguish this plugin from the original.
+
+## Original readme starts here
 
 Plugin to decrypt Smart Meter output over P1 customer interface and send it over UDP, MQTT and/or to a serial port.
 
