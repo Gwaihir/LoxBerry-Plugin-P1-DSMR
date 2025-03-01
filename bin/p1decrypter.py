@@ -321,7 +321,8 @@ class P1decrypter:
     def mapping(self, decryption):
         logging.debug("Decryption done. Extract data by mapping configuration: {0}".format(decryption))
 
-        decryption_decoded = decryption.decode()
+        decryption_decoded = decryption.decode("ASCII")
+#        logging.debug("Data: {0}".format(decryption_decoded))
         mapped_values_string = ""
         if self._args.raw:
             logging.debug("Raw output is enabled. Mapping extraction stopped. Send complete telegram")
@@ -334,14 +335,12 @@ class P1decrypter:
                 input_multi_array.append([i.split(',')[0].strip().strip("'"), i.split(',')[1].strip().strip("'")])
 
             for i in input_multi_array:
-                value = re.search(i[1], decryption_decoded).group(0)
+                value = re.search(i[1], decryption_decoded).group(0) #Brittle! Breaks if no match was found.
                 mapped_values_string += i[0] + ":" + value + "\n"
                 mapped_values_array.append([i[0], value])
 
-            mapped_values_string = mapped_values_string
-
         if self._args.send_to_udp:
-            self.send_to_udb(mapped_values_string)
+            self.send_to_udp(mapped_values_string)
 
         if self._args.send_to_serial_port:
             self.send_to_serial_port(mapped_values_string)
@@ -360,7 +359,7 @@ class P1decrypter:
         serial_port.write(output.encode())
         serial_port.close()
 
-    def send_to_udb(self, output):
+    def send_to_udp(self, output):
         logging.debug("Send the decrypted data over udp: {0}".format(output))
         connection = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         res = connection.sendto(output.encode(), (self._args.udp_host, self._args.udp_port))
